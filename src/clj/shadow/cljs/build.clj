@@ -4,7 +4,7 @@
            [com.google.javascript.jscomp JSModule SourceFile CompilerOptions$DevMode CompilerOptions$TracerMode])
   (:require [clojure.pprint :refer (pprint)]
             [clojure.data.json :as json]
-            [clojure.java.io :as io] 
+            [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
             [clojure.edn :as edn]
@@ -18,6 +18,7 @@
             [clojure.tools.reader :as reader]
             [clojure.tools.reader.reader-types :as readers]
             [clojure.core.reducers :as r]
+            [shadow.cljs.log :as log]
             [shadow.cljs.passes :as passes]
             [loom.graph :as lg]
             [loom.alg :as la]
@@ -187,13 +188,13 @@
         in (readers/indexing-push-back-reader cljs-source 1 name)
         source-map? (:source-map state)]
     ;; FIXME: should assume the ns was already processed when analyzing namespaces
-    ;; and skip the ns, nasty bit a code duplication! 
+    ;; and skip the ns, nasty bit a code duplication!
 
     (binding [comp/*source-map-data* (when source-map?
                                        (atom {:source-map (sorted-map)
                                               :gen-col 0
                                               :gen-line 0}))]
-             
+
       (let [result
             (loop [{:keys [ns ns-info] :as compile-state} {:js "" :ns 'cljs.user}] ;; :ast []
               (let [;; FIXME: i really dont like bindings ...
@@ -202,7 +203,7 @@
                                    ana/*cljs-file* name
                                    reader/*data-readers* tags/*cljs-data-readers*
                                    reader/*alias-map* (merge reader/*alias-map*
-                                                             (:requires ns-info) 
+                                                             (:requires ns-info)
                                                              (:require-macros ns-info))]
                            (reader/read in nil eof-sentinel))]
                 (if (identical? form eof-sentinel)
@@ -220,7 +221,7 @@
                                  ;; state (update-in state [:ast] ast)
                                  ast-js (with-out-str
                                           (comp/emit ast))
-                                 
+
                                  compile-state (if (= :ns (:op ast))
                                                  (let [ns-name (:name ast)
                                                        requires (requires-from-ns-ast state ast)]
@@ -242,7 +243,7 @@
   "given the compiler state and a cljs resource, compile it and return the updated resource
    should not touch global state"
   [state {:keys [name last-modified source] :as rc}]
-  (prn [:compile-cljs name])
+  (log/info [:compile-cljs name])
   (let [{:keys [js ns requires source-map] :as result} (compile-cljs-string state source name)]
     (assoc rc
       :js-source js
@@ -282,8 +283,8 @@
         ;; FIXME: should explode if ns is already defined
         (let [ns-name (:name ast)
               requires (requires-from-ns-ast state ast)]
-          (assoc rc 
-            :ns ns-name 
+          (assoc rc
+            :ns ns-name
             :ns-info (dissoc ast :env)
             :provides #{ns-name}
             :requires requires))))))
@@ -324,7 +325,7 @@
   "finds all cljs resources in .jar files in the classpath
    ignores PATHS in classpath, add manually if you expect to find cljs there"
   [{:keys [source-paths work-dir] :as state}]
-  (println "Find cljs resources in jars")
+  (log/info "Find cljs resources in jars")
   (time
    (->> (classpath-entries)
         (filter is-jar?)
@@ -336,8 +337,8 @@
   ([state path]
      (step-find-resources state path {:reloadable true}))
   ([state path opts]
-     (println "Find cljs resources in path:" (pr-str path))
-     (time
+     (log/info "Find cljs resources in path:" (pr-str path))
+     (log/time
       (-> state
           (assoc-in [:source-paths path] (assoc opts
                                            :path path))
@@ -347,7 +348,7 @@
 (def cljs-core-name "cljs/core.cljs")
 (def goog-base-name "goog/base.js")
 
-(defmacro with-compiler-env 
+(defmacro with-compiler-env
   "compiler env is a rather big piece of dynamic state
    so we take it out when needed and put the updated version back when done
    doesn't carry the atom arround cause the compiler state itself should be persistent
@@ -366,11 +367,11 @@
   (when-not (:configured state)
     (throw (ex-info "finalize config first" {})))
 
-  (println "Compiling cljs.core")
+  (log/info "Compiling cljs.core")
   (when-not (get-in state [:sources goog-base-name])
      (throw (ex-info (str "couldn't find " goog-base-name) {})))
 
-  (time
+  (log/time
    (with-compiler-env state
      (let [cljs-core (get-in state [:sources cljs-core-name])]
        (when-not cljs-core
@@ -391,7 +392,7 @@
 
       (when-not src
         (throw (ex-info "cannot find required namespace" {:ns ns-sym :name name})))
-      
+
       ;; if provides are present, assume we already know everything for it and its deps
       (if (seq (:provides src))
         state
@@ -408,8 +409,8 @@
            ))))))
 
 (defn step-finalize-config [state]
-  (println "Finalizing config ...")
-  (time
+  (log/info "Finalizing config ...")
+  (log/time
    (assoc state
      :configured true
      :main-deps {}
@@ -433,14 +434,14 @@
       (let [requires (get-in state [:sources name :requires])]
         (when-not requires
           (throw (ex-info "cannot find required namespace deps" {:ns ns-sym :name name})))
-        
+
         (let [state (conj-in state [:deps-visited] name)
               state (reduce do-resolve-ns-deps state requires)]
           (conj-in state [:deps-ordered] name)
           )))))
 
 (defn resolve-main-deps [state main-cljs]
-  (println "Resolving deps for:" main-cljs)
+  (log/info "Resolving deps for:" main-cljs)
   (let [{:keys [deps-ordered]} (-> state
                                    (assoc :deps-ordered []
                                           :deps-visited #{})
@@ -450,8 +451,8 @@
 (defn do-resolve-main
   "resolve all deps of a given main ns"
   [state main-cljs]
-  (println "Compile main: " main-cljs)
-  (time
+  (log/info "Compile main: " main-cljs)
+  (log/time
    (with-compiler-env state
      (-> state
          (assoc :pending [])
@@ -517,8 +518,8 @@
       state)))
 
 (defn step-load-compiled-files [state]
-  (println "Loading precompiled files ...")
-  (time
+  (log/info "Loading precompiled files ...")
+  (log/time
    (reduce do-load-compiled-files
     state
     ;; only load precompiled cljs where the source has already been discovered
@@ -532,12 +533,12 @@
 (defn flush-to-disk
   "flush all generated sources to disk, not terribly useful, use flush-unoptimized to include source maps"
   [{:keys [work-dir sources] :as state}]
-  (println "Flushing to disk")
-  (time
+  (log/info "Flushing to disk")
+  (log/time
    (doseq [{:keys [type name compiled] :as src} (vals sources)
            :when (and (= :cljs type)
                       compiled)]
-     
+
      (let [{:keys [js-name js-source]} src
            target (io/file work-dir js-name)]
        (io/make-parents target)
@@ -567,7 +568,7 @@
                         {:module name
                          :unknown (set/difference depends-on module-set)})))))
 
-  (apply lg/digraph 
+  (apply lg/digraph
          (for [{:keys [name depends-on]} (vals modules)
                dep depends-on]
            [name dep])))
@@ -590,12 +591,12 @@
   [modules]
   (when-not (seq modules)
     (throw (ex-info "no modules defined" {})))
-  
+
   ;; if only one module is defined we dont need all this work
   (if (= 1 (count modules))
     (vals modules)
     ;; else: multiple modules must be sorted in dependency order
-    (let [module-graph (module-graph modules) 
+    (let [module-graph (module-graph modules)
           module-order (reverse (la/topsort module-graph))
           module-set (set module-order)
           modules (reduce
@@ -628,7 +629,7 @@
                          dups sorted-dups]
                     (if-let [[source-name used-by] (first dups)]
                       (let [common-ancestor (first module-order) ;; FIXME: actually try to find one
-                            _ (prn [:moving source-name :used-by used-by :to common-ancestor])
+                            _ (log/info [:moving source-name :used-by used-by :to common-ancestor])
                             modules (reduce (fn [modules dep-mod]
                                               (update-in modules
                                                          [dep-mod :sources]
@@ -637,7 +638,7 @@
                                             modules
                                             used-by)
                             modules (update-in modules [common-ancestor :sources] conj source-name)]
-                        
+
                         (recur modules (rest dups)))
                       ;; done
                       modules
@@ -647,8 +648,8 @@
       )))
 
 (defn step-compile-modules [state]
-  (println "Compiling Modules ...")
-  (time
+  (log/info "Compiling Modules ...")
+  (log/time
    (let [modules (sort-and-compact-modules (:modules state))
          source-names (->> modules
                            (mapcat :sources)
@@ -692,17 +693,17 @@
   (let [goog-base (get-in state [:sources goog-base-name :js-source])]
     (when-not (seq goog-base)
       (throw (ex-info "no goog/base.js" {})))
-    
+
     (when (< (count goog-base) 500)
       (throw (ex-info "probably not the goog/base.js you were expecting"
                       (get-in state [:sources goog-base-name]))))
-    
+
     ;; TODO: defines should be actually defineable
     (str "var CLOSURE_NO_DEPS = true;\n"
          ;; goog.findBasePath_() requires a base.js which we dont have
          ;; this is usually only needed for unoptimized builds anyways
          "var CLOSURE_BASE_PATH = '" public-path "/src/';\n"
-         "var CLOSURE_DEFINES = " 
+         "var CLOSURE_DEFINES = "
          (json/write-str {"goog.DEBUG" false
                           "goog.locale" "DE"})
          ";\n"
@@ -726,7 +727,7 @@
                                 (throw (ex-info "missing js-source for source" {:js-name js-name :name (:name src)})))
 
                               (.add js-mod (SourceFile/fromCode js-name js-source)))
-                            
+
                             (when (seq append-js)
                               (.add js-mod (SourceFile/fromCode (str "mod_" name "_append.js") append-js)))
 
@@ -744,19 +745,19 @@
       )))
 
 (defn- flush-source-maps [{modules :optimized :keys [^File public-dir public-path] :as state}]
-  (println "Flushing source maps ...")
+  (log/info "Flushing source maps ...")
   (when-not (seq modules)
     (throw (ex-info "flush before optimize?" {})))
 
   (when-not public-dir
     (throw (ex-info "missing :public-dir" {})))
-  
-  (time
+
+  (log/time
    (doseq [{:keys [source-map-name source-map-json sources] :as mod} modules]
      (let [target (io/file public-dir "src" source-map-name)]
        (io/make-parents target)
        (spit target source-map-json))
-     
+
      ;; flush all sources used by this module
      ;; FIXME: flushes all files always, should skip if files already exist and are current
      (doseq [{:keys [type name source] :as src} (map #(get-in state [:sources %]) sources)]
@@ -771,14 +772,14 @@
         (json/write-str (map #(select-keys % [:name :js-name :mains :depends-on :default :sources]) modules))))
 
 (defn flush-modules-to-disk [{modules :optimized :keys [^File public-dir public-path] :as state} ]
-  (println "Flushing modules to disk ...")
+  (log/info "Flushing modules to disk ...")
   (when-not (seq modules)
     (throw (ex-info "flush before optimize?" {})))
 
   (when-not public-dir
     (throw (ex-info "missing :public-dir" {})))
-  
-  (time
+
+  (log/time
    (doseq [{:keys [default js-source prepend source-map-name name js-name] :as mod} modules]
      (let [target (io/file public-dir js-name)
            js-source (str prepend js-source)
@@ -788,22 +789,22 @@
                                                    :when (contains? deps (:name other))]
                                                (str "importScripts('" (:js-name other) "');")))
                               "\n\n"
-                              js-source)) 
+                              js-source))
                        js-source)]
        (io/make-parents target)
        (spit target js-source)
-       (prn [:wrote-module name js-name (count js-source)])
+       (log/info [:wrote-module name js-name (count js-source)])
 
        (when source-map-name
          (spit target (str "\n//# sourceMappingURL=src/" (file-basename source-map-name) "\n")
                :append true)))))
 
   (flush-manifest public-dir modules)
-   
+
   (when (:source-map state)
     (flush-source-maps state))
 
-  state) 
+  state)
 
 (defn closure-optimize
   "takes the current defined modules and runs it through the closure optimizer
@@ -814,8 +815,8 @@
   (when-not (seq build-modules)
     (throw (ex-info "optimize before compile?" {})))
 
-  (println "Closure optimize ...")
-  (time
+  (log/info "Closure optimize ...")
+  (log/time
    (let [modules (make-closure-modules state build-modules)
          cc (closure/make-closure-compiler)
          co (closure/make-options state)
@@ -828,7 +829,7 @@
          result (.compileModules cc externs (map :js-module modules) co)]
 
      (closure/report-failure result)
-     
+
      (assoc state
        :optimized (when (.success result)
                     (let [source-map (when source-map?
@@ -837,7 +838,7 @@
                       (vec (for [{:keys [js-name js-module sources] :as m} modules
                                  ;; reset has to be called before .toSource
                                  :let [_ (when source-map?
-                                           (.reset source-map)) 
+                                           (.reset source-map))
                                        js-source (.toSource cc js-module)]]
                              (-> m
                                  (dissoc :js-module)
@@ -869,10 +870,10 @@
   [{:keys [build-modules public-dir public-path] :as state}]
   (when-not (seq build-modules)
     (throw (ex-info "flush before compile?" {})))
-  (println "Flushing unoptimized modules")
-  (time
+  (log/info "Flushing unoptimized modules")
+  (log/time
    (let [source-map? (boolean (:source-map state))]
-     
+
      (doseq [{:keys [type name source] :as src} (->> (mapcat :sources build-modules)
                                                      (map #(get-in state [:sources %])))
              :let [target (io/file public-dir "src" name)]
@@ -888,21 +889,21 @@
        (spit target source)
 
        ;; also spit js source since for source maps
-       (when (= :cljs type) 
+       (when (= :cljs type)
          (let [{:keys [source-map js-name js-source]} src
                target (io/file public-dir "src" js-name)]
 
            (spit target js-source)
-           
+
            (when source-map
              (let [source-map-name (str js-name ".map")]
                (spit (io/file public-dir "src" source-map-name)
                      (sm/encode {name source-map} {}))
                (spit target (str "//# sourceMappingURL=" (file-basename source-map-name)) :append true)))
            )))
-     
+
      (flush-manifest public-dir build-modules)
-     
+
      ;; flush fake modules
      (doseq [{:keys [default js-name name prepend sources] :as mod} build-modules]
        (let [provided-ns (mapcat #(reverse (get-in state [:sources % :provides]))
@@ -935,7 +936,7 @@
        (set)))
 
 (defn reset-resource [{:keys [name type ^File file] :as src}]
-  (prn [:reloading name file])
+  (log/info [:reloading name file])
   (-> src
       (dissoc :ns :ns-info :requires :provides :js-source :compiled :compiled-at)
       (read-resource)
@@ -951,7 +952,7 @@
   "checks if a src was touched and reset the associated state if it was"
   [state {:keys [name type ^File file last-modified] :as src}]
   (if (> (.lastModified file) last-modified)
-    (merge-resources state [(reset-resource src)]) 
+    (merge-resources state [(reset-resource src)])
     state))
 
 (defn step-reload-modified
@@ -976,20 +977,20 @@
                       (filter #(contains? reloadable-paths (:source-path %)))
                       (map #(select-keys % [:last-modified :name :file])))]
 
-    (prn [:watching (count sources)])
+    (log/info [:watching (count sources)])
     (loop []
       (let [modified (filter (fn [{:keys [name ^File file last-modified]}]
                                (> (.lastModified file) last-modified))
                              sources)]
         (if (seq modified)
           (do (doseq [{:keys [name file]} modified]
-                (prn [:found-modified name file]))
+                (log/info [:found-modified name file]))
               (map :name modified))
           ;; nothing modified, wait and look again
           (do (Thread/sleep 500)
               (recur)))))))
 
-(defn wait-and-reload! 
+(defn wait-and-reload!
   "wait for modified files, reload them and return reloaded state"
   [state]
   (let [modified (wait-for-modified-files! state)]
